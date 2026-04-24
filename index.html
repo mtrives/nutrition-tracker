@@ -466,7 +466,25 @@
   </style>
 </head>
 <body>
+  <!-- Login banner -->
+  <div id="login-screen" style="display:flex;position:fixed;inset:0;background:var(--bg3);z-index:999;align-items:center;justify-content:center;">
+    <div style="background:var(--bg);border:0.5px solid var(--border);border-radius:var(--radius-lg);padding:2rem;max-width:340px;width:90%;text-align:center;">
+      <div style="font-size:40px;margin-bottom:1rem;">🥗</div>
+      <h2 style="font-size:20px;font-weight:500;margin-bottom:8px;">Mi Tracker de Nutrición</h2>
+      <p style="font-size:14px;color:var(--text2);margin-bottom:1.5rem;">Inicia sesión para sincronizar tus datos en todos tus dispositivos.</p>
+      <button onclick="signInWithGoogle()" class="btn btn-primary" style="width:100%;height:44px;font-size:15px;display:flex;align-items:center;justify-content:center;gap:10px;">
+        <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#fff" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#fff" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#fff" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#fff" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>
+        Continuar con Google
+      </button>
+    </div>
+  </div>
+
   <div class="app">
+    <!-- User bar -->
+    <div id="user-bar" style="display:none;flex-direction:row;align-items:center;justify-content:space-between;margin-bottom:1rem;padding:8px 12px;background:var(--bg2);border-radius:var(--radius);font-size:13px;">
+      <span id="user-name" style="color:var(--text2)"></span>
+      <button onclick="signOut()" class="btn btn-sm" style="font-size:12px;">Cerrar sesión</button>
+    </div>
     <h1>Mi tracker de nutrición</h1>
 
     <div class="tabs">
@@ -680,11 +698,98 @@
     </div>
   </div>
 
+  <!-- Firebase -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut as fbSignOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+    import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyAPrJVTFOByEvFaUGqeQQbDxY-kglyRjjI",
+      authDomain: "nutrition-tracker-mertxe.firebaseapp.com",
+      projectId: "nutrition-tracker-mertxe",
+      storageBucket: "nutrition-tracker-mertxe.firebasestorage.app",
+      messagingSenderId: "772851401255",
+      appId: "1:772851401255:web:1e640e06a45d7063748402"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    let currentUser = null;
+    let unsubscribe = null;
+
+    // Expose to global scope so non-module script can call them
+    window.signInWithGoogle = async () => {
+      const provider = new GoogleAuthProvider();
+      try { await signInWithPopup(auth, provider); } catch(e) { alert('Error al iniciar sesión: ' + e.message); }
+    };
+
+    window.signOut = async () => {
+      if (unsubscribe) unsubscribe();
+      await fbSignOut(auth);
+      currentUser = null;
+      document.getElementById('login-screen').style.display = 'flex';
+      document.getElementById('user-bar').style.display = 'none';
+    };
+
+    window.saveState = async () => {
+      // Always save to localStorage as backup
+      try { localStorage.setItem(window.STORAGE_KEY, JSON.stringify(window.state)); } catch(e) {}
+      // Save to Firestore if logged in
+      if (!currentUser) return;
+      try {
+        await setDoc(doc(db, 'users', currentUser.uid), { state: JSON.stringify(window.state) });
+      } catch(e) { console.error('Firestore save error', e); }
+    };
+
+    onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        currentUser = user;
+        document.getElementById('login-screen').style.display = 'none';
+        document.getElementById('user-bar').style.display = 'flex';
+        document.getElementById('user-name').textContent = user.displayName || user.email;
+
+        // Load state from Firestore
+        try {
+          const snap = await getDoc(doc(db, 'users', user.uid));
+          if (snap.exists()) {
+            const raw = snap.data().state;
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              Object.assign(window.state, parsed);
+            }
+          }
+        } catch(e) { console.error('Firestore load error', e); }
+
+        window.applyTargetsToUI();
+        window.renderDay();
+        window.renderMyFoods();
+        const _sel = document.getElementById('meal-selector');
+        if (_sel) _sel.innerHTML = ['desayuno','preentreno','comida','merienda','cena'].map(m =>
+          `<button class="meal-pill ${m==='desayuno'?'active':''}" onclick="selectMeal('${m}')">${{desayuno:'Desayuno',preentreno:'Preentreno',comida:'Comida',merienda:'Merienda',cena:'Cena'}[m]}</button>`
+        ).join('');
+
+      } else {
+        // Not logged in — show login screen, but still load from localStorage
+        document.getElementById('login-screen').style.display = 'flex';
+        document.getElementById('user-bar').style.display = 'none';
+        window.loadState();
+        window.applyTargetsToUI();
+        window.renderDay();
+        window.renderMyFoods();
+      }
+    });
+  </script>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
   <script>
     const STORAGE_KEY = 'mi_tracker_v1';
+    window.STORAGE_KEY = STORAGE_KEY;
 
     let state = { foods: {}, weights: [], targets: { cal: 1710, prot: 130, carb: 171, fat: 57 } };
+    window.state = state;
     let selectedMeal = 'desayuno';
     let selectedMood = null;
     const MEALS = ['desayuno','preentreno','comida','merienda','cena'];
@@ -710,13 +815,21 @@
     function loadState() {
       try {
         const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) state = JSON.parse(raw);
+        if (raw) { const parsed = JSON.parse(raw); Object.assign(state, parsed); window.state = state; }
       } catch(e) {}
     }
+    window.loadState = loadState;
 
     function saveState() {
+      window.state = state;
+      // saveState is overridden by Firebase module when logged in
+      // This local version is the fallback
       try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch(e) {}
     }
+    window.saveState = saveState;
+
+    // Keep window.state reference alive after mutations
+    function syncState() { window.state = state; }
 
     function switchTab(t) {
       document.querySelectorAll('.tab').forEach((b, i) => b.classList.toggle('active', ['comidas','peso','ajustes'][i] === t));
@@ -1255,6 +1368,7 @@
     }
 
     function applyTargetsToUI() {
+      window.state = state; // keep window.state in sync
       const t = state.targets;
       document.getElementById('cal-target').textContent  = t.cal;
       document.getElementById('prot-target').textContent = t.prot;
@@ -1289,16 +1403,7 @@
         : 'Sin API key configurada.';
       el.style.color = k ? 'var(--green)' : 'var(--text2)';
     }
-    loadState();
-    applyTargetsToUI();
-    renderDay();
-    renderMyFoods();
-    // cal chart renders when user switches to peso tab
-    // render initial meal pills
-    const _sel = document.getElementById('meal-selector');
-    if (_sel) _sel.innerHTML = ['desayuno','preentreno','comida','merienda','cena'].map(m =>
-      `<button class="meal-pill ${m==='desayuno'?'active':''}" onclick="selectMeal('${m}')">${{desayuno:'Desayuno',preentreno:'Preentreno',comida:'Comida',merienda:'Merienda',cena:'Cena'}[m]}</button>`
-    ).join('');
+    // Initialization handled by Firebase onAuthStateChanged
 
     // ---- PHOTO → AI MACROS ----
     function getApiKey() {
@@ -1487,6 +1592,11 @@ Responde SOLO con un JSON válido, sin texto adicional, con este formato exacto:
       stopPhoto();
       document.getElementById('photo-result-wrap').style.display = 'none';
     }
+
+    // Expose functions for Firebase module
+    window.applyTargetsToUI = applyTargetsToUI;
+    window.renderDay = renderDay;
+    window.renderMyFoods = renderMyFoods;
 
   </script>
 </body>
